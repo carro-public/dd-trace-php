@@ -214,7 +214,6 @@ class LaravelIntegration extends Integration
 
         \DDTrace\trace_method('Illuminate\\Queue\\Worker', 'process', function (SpanData $spanData, $args) use ($integration) {
             $serviceName = $integration->getServiceName();
-            $spanData->type = Type::MESSAGE_CONSUMER;
             $spanData->service = $serviceName;
 
             $payload = $args[1]->payload();
@@ -226,7 +225,6 @@ class LaravelIntegration extends Integration
 
         \DDTrace\trace_method('Bref\\LaravelBridge\\Queue\\LaravelSqsHandler', 'process', function (SpanData $spanData, $args) use ($integration) {
             $serviceName = $integration->getServiceName();
-            $spanData->type = Type::MESSAGE_CONSUMER;
             $spanData->service = $serviceName;
 
             $payload = $args[1]->payload();
