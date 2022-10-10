@@ -13,6 +13,11 @@ class Type
     const MESSAGE_CONSUMER = 'queue';
     const MESSAGE_PRODUCER = 'queue';
 
+    const LARAVEL_TYPE_JOB = 'job';
+    const LARAVEL_TYPE_NOTIFICATION = 'notification';
+    const LARAVEL_TYPE_LISTENER = 'listener';
+    const LARAVEL_TYPE_BROADCAST = 'broadcast';
+
     const CASSANDRA = 'cassandra';
     const ELASTICSEARCH = 'elasticsearch';
     const MEMCACHED = 'memcached';
