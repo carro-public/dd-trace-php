@@ -76,6 +76,11 @@ if test "$PHP_DDTRACE" != "no"; then
         ext/weakrefs.c"
     fi
 
+    if test $PHP_VERSION_ID -ge 80100; then
+      EXTRA_PHP_SOURCES="$EXTRA_PHP_SOURCES \
+        ext/handlers_fiber.c"
+    fi
+
     EXTRA_ZAI_SOURCES="\
       zend_abstract_interface/interceptor/php8/interceptor.c \
       zend_abstract_interface/interceptor/php8/resolver.c \
@@ -103,9 +108,9 @@ if test "$PHP_DDTRACE" != "no"; then
     ext/handlers_internal.c \
     ext/handlers_pcntl.c \
     ext/integrations/integrations.c \
-    ext/ip_extraction.c \
     ext/logging.c \
     ext/memory_limit.c \
+    ext/limiter/limiter.c \
     ext/priority_sampling/priority_sampling.c \
     ext/profiling.c \
     ext/random.c \
@@ -204,6 +209,7 @@ if test "$PHP_DDTRACE" != "no"; then
   PHP_ADD_BUILD_DIR([$ext_builddir/src/dogstatsd])
 
   PHP_ADD_BUILD_DIR([$ext_builddir/ext])
+  PHP_ADD_BUILD_DIR([$ext_builddir/ext/limiter])
   PHP_ADD_BUILD_DIR([$ext_builddir/ext/priority_sampling])
   PHP_ADD_BUILD_DIR([$ext_builddir/ext/tracer_tag_propagation])
   PHP_ADD_BUILD_DIR([$ext_builddir/ext/integrations])

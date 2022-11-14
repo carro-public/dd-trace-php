@@ -20,7 +20,7 @@ ARCHITECTURE=$(shell uname -m)
 
 VERSION := $(shell awk -F\' '/const VERSION/ {print $$2}' < src/DDTrace/Tracer.php)
 PROFILING_RELEASE_URL := https://github.com/DataDog/dd-prof-php/releases/download/v0.7.2/datadog-profiling.tar.gz
-APPSEC_RELEASE_URL := https://github.com/DataDog/dd-appsec-php/releases/download/v0.4.3/dd-appsec-php-0.4.3-amd64.tar.gz
+APPSEC_RELEASE_URL := https://github.com/DataDog/dd-appsec-php/releases/download/v0.4.4/dd-appsec-php-0.4.4-amd64.tar.gz
 
 INI_FILE := $(shell php -i | awk -F"=>" '/Scan this dir for additional .ini files/ {print $$2}')/ddtrace.ini
 
@@ -936,7 +936,7 @@ test_web_symfony_42: global_test_run_dependencies
 test_web_symfony_44: global_test_run_dependencies
 	$(COMPOSER) --working-dir=tests/Frameworks/Symfony/Version_4_4 update
 	php tests/Frameworks/Symfony/Version_4_4/bin/console cache:clear --no-warmup --env=prod
-	$(call run_tests,tests/Integrations/Symfony/V4_4)
+	$(call run_tests,--testsuite=symfony-44-test)
 test_web_symfony_50: global_test_run_dependencies
 	$(COMPOSER) --working-dir=tests/Frameworks/Symfony/Version_5_0 install # EOL; install from lock
 	php tests/Frameworks/Symfony/Version_5_0/bin/console cache:clear --no-warmup --env=prod
@@ -948,7 +948,7 @@ test_web_symfony_51: global_test_run_dependencies
 test_web_symfony_52: global_test_run_dependencies
 	$(COMPOSER) --working-dir=tests/Frameworks/Symfony/Version_5_2 update
 	php tests/Frameworks/Symfony/Version_5_2/bin/console cache:clear --no-warmup --env=prod
-	$(call run_tests,tests/Integrations/Symfony/V5_2)
+	$(call run_tests,--testsuite=symfony-52-test)
 
 test_web_wordpress_48: global_test_run_dependencies
 	$(call run_tests,tests/Integrations/WordPress/V4_8)

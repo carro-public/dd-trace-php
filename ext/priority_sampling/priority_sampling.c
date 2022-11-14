@@ -7,6 +7,8 @@
 #include "../compat_string.h"
 #include "../configuration.h"
 
+#include "../limiter/limiter.h"
+
 ZEND_EXTERN_MODULE_GLOBALS(ddtrace);
 
 enum dd_sampling_mechanism {
@@ -16,10 +18,10 @@ enum dd_sampling_mechanism {
     DD_MECHANISM_MANUAL = 4,
 };
 
-static void dd_update_decision_maker_tag(ddtrace_span_fci *span, enum dd_sampling_mechanism mechanism) {
-    zend_array *meta = ddtrace_spandata_property_meta(&span->span);
+static void dd_update_decision_maker_tag(ddtrace_span_data *span, enum dd_sampling_mechanism mechanism) {
+    zend_array *meta = ddtrace_spandata_property_meta(span);
 
-    zend_long sampling_priority = ddtrace_fetch_prioritySampling_from_span(span->span.chunk_root);
+    zend_long sampling_priority = ddtrace_fetch_prioritySampling_from_span(span->root);
     if (DDTRACE_G(propagated_priority_sampling) == sampling_priority) {
         return;
     }
@@ -55,14 +57,15 @@ static bool dd_rule_matches(zval *pattern, zval *prop) {
     return Z_TYPE(ret) == IS_LONG && Z_LVAL(ret) > 0;
 }
 
-static void dd_decide_on_sampling(ddtrace_span_fci *span) {
+static void dd_decide_on_sampling(ddtrace_span_data *span) {
     int priority = DDTRACE_G(default_priority_sampling);
     // manual if it's not just inherited, otherwise this value is irrelevant (as sampling priority will be default)
     enum dd_sampling_mechanism mechanism = DD_MECHANISM_MANUAL;
     if (priority == DDTRACE_PRIORITY_SAMPLING_UNKNOWN) {
         zval *rule;
         bool explicit_rule = zai_config_memoized_entries[DDTRACE_CONFIG_DD_TRACE_SAMPLE_RATE].name_index >= 0;
-        double sample_rate = get_DD_TRACE_SAMPLE_RATE();
+        double default_sample_rate = get_DD_TRACE_SAMPLE_RATE(), sample_rate = default_sample_rate;
+
         ZEND_HASH_FOREACH_VAL(get_DD_TRACE_SAMPLING_RULES(), rule) {
             if (Z_TYPE_P(rule) != IS_ARRAY) {
                 continue;
@@ -72,10 +75,10 @@ static void dd_decide_on_sampling(ddtrace_span_fci *span) {
 
             zval *rule_pattern;
             if ((rule_pattern = zend_hash_str_find(Z_ARR_P(rule), ZEND_STRL("service")))) {
-                rule_matches &= dd_rule_matches(rule_pattern, ddtrace_spandata_property_service(&span->span));
+                rule_matches &= dd_rule_matches(rule_pattern, ddtrace_spandata_property_service(span));
             }
             if ((rule_pattern = zend_hash_str_find(Z_ARR_P(rule), ZEND_STRL("name")))) {
-                rule_matches &= dd_rule_matches(rule_pattern, ddtrace_spandata_property_name(&span->span));
+                rule_matches &= dd_rule_matches(rule_pattern, ddtrace_spandata_property_name(span));
             }
 
             zval *sample_rate_zv;
@@ -87,44 +90,52 @@ static void dd_decide_on_sampling(ddtrace_span_fci *span) {
         }
         ZEND_HASH_FOREACH_END();
 
-        zval sample_rate_zv;
-        ZVAL_DOUBLE(&sample_rate_zv, sample_rate);
-        zend_hash_str_update(ddtrace_spandata_property_metrics(&span->span), ZEND_STRL("_dd.rule_psr"),
-                             &sample_rate_zv);
-
         bool sampling = (double)genrand64_int64() < sample_rate * (double)~0ULL;
+        bool limited  = ddtrace_limiter_active() && (sampling && !ddtrace_limiter_allow());
 
         if (explicit_rule) {
             mechanism = DD_MECHANISM_RULE;
-            priority = sampling ? PRIORITY_SAMPLING_USER_KEEP : PRIORITY_SAMPLING_USER_REJECT;
+            priority = sampling && !limited ? PRIORITY_SAMPLING_USER_KEEP : PRIORITY_SAMPLING_USER_REJECT;
         } else {
             mechanism = DD_MECHANISM_AGENT_RATE;
-            priority = sampling ? PRIORITY_SAMPLING_AUTO_KEEP : PRIORITY_SAMPLING_AUTO_REJECT;
+            priority = sampling && !limited ? PRIORITY_SAMPLING_AUTO_KEEP : PRIORITY_SAMPLING_AUTO_REJECT;
+        }
+
+        zval sample_rate_zv;
+        ZVAL_DOUBLE(&sample_rate_zv, sample_rate);
+        zend_hash_str_update(ddtrace_spandata_property_metrics(span), ZEND_STRL("_dd.rule_psr"),
+                             &sample_rate_zv);
+
+        if (limited) {
+            zval limit_zv;
+            ZVAL_DOUBLE(&limit_zv, ddtrace_limiter_rate());
+            zend_hash_str_update(ddtrace_spandata_property_metrics(span), ZEND_STRL("_dd.limit_psr"),
+                            &limit_zv);
         }
     }
 
     zval priority_zv;
     ZVAL_LONG(&priority_zv, priority);
-    zend_hash_str_update(ddtrace_spandata_property_metrics(&span->span), ZEND_STRL("_sampling_priority_v1"),
+    zend_hash_str_update(ddtrace_spandata_property_metrics(span), ZEND_STRL("_sampling_priority_v1"),
                          &priority_zv);
 
     dd_update_decision_maker_tag(span, mechanism);
 }
 
 zend_long ddtrace_fetch_prioritySampling_from_root(void) {
-    if (!DDTRACE_G(open_spans_top)) {
+    if (!DDTRACE_G(active_stack)->root_span) {
         if (DDTRACE_G(default_priority_sampling) == DDTRACE_PRIORITY_SAMPLING_UNSET) {
             return DDTRACE_PRIORITY_SAMPLING_UNKNOWN;
         }
         return DDTRACE_G(default_priority_sampling);
     }
 
-    return ddtrace_fetch_prioritySampling_from_span(DDTRACE_G(open_spans_top)->span.chunk_root);
+    return ddtrace_fetch_prioritySampling_from_span(DDTRACE_G(active_stack)->root_span);
 }
 
-zend_long ddtrace_fetch_prioritySampling_from_span(ddtrace_span_fci *root_span) {
+zend_long ddtrace_fetch_prioritySampling_from_span(ddtrace_span_data *root_span) {
     zval *priority_zv;
-    zend_array *root_metrics = ddtrace_spandata_property_metrics(&root_span->span);
+    zend_array *root_metrics = ddtrace_spandata_property_metrics(root_span);
     if (!(priority_zv = zend_hash_str_find(root_metrics, ZEND_STRL("_sampling_priority_v1")))) {
         if (DDTRACE_G(default_priority_sampling) == DDTRACE_PRIORITY_SAMPLING_UNSET) {
             return DDTRACE_PRIORITY_SAMPLING_UNKNOWN;
@@ -138,13 +149,13 @@ zend_long ddtrace_fetch_prioritySampling_from_span(ddtrace_span_fci *root_span) 
 }
 
 void ddtrace_set_prioritySampling_on_root(zend_long priority) {
-    if (!DDTRACE_G(open_spans_top)) {
+    ddtrace_span_data *root_span = DDTRACE_G(active_stack)->root_span;
+
+    if (!root_span) {
         return;
     }
 
-    ddtrace_span_fci *root_span = DDTRACE_G(open_spans_top)->span.chunk_root;
-
-    zend_array *root_metrics = ddtrace_spandata_property_metrics(&root_span->span);
+    zend_array *root_metrics = ddtrace_spandata_property_metrics(root_span);
     if (priority == DDTRACE_PRIORITY_SAMPLING_UNKNOWN || priority == DDTRACE_PRIORITY_SAMPLING_UNSET) {
         zend_hash_str_del(root_metrics, ZEND_STRL("_sampling_priority_v1"));
     } else {
