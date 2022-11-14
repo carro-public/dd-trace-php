@@ -2,10 +2,13 @@
 
 namespace DDTrace\Integrations\Laravel;
 
+use ReflectionClass;
 use DDTrace\SpanData;
 use DDTrace\Integrations\Integration;
 use DDTrace\Tag;
 use DDTrace\Type;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Collection;
 
 /**
  * The base Laravel integration which delegates loading to the appropriate integration version.
@@ -49,6 +52,10 @@ class LaravelIntegration extends Integration
         $rootSpan = \DDTrace\root_span();
 
         if (null === $rootSpan) {
+            if (getenv('DD_TRACE_CLI_ENABLED')) {
+                return $this->workerInit();
+            }
+
             return Integration::NOT_LOADED;
         }
 
@@ -199,6 +206,109 @@ class LaravelIntegration extends Integration
         );
 
         return Integration::LOADED;
+    }
+
+    public function workerInit()
+    {
+        $integration = $this;
+
+        \DDTrace\trace_method('Illuminate\\Queue\\Worker', 'process', function (SpanData $spanData, $args) use ($integration) {
+            $serviceName = $integration->getServiceName();
+            $spanData->service = $serviceName;
+
+            $payload = $args[1]->payload();
+            $data = $payload['data'];
+            $spanData->resource = $integration->getJobName($args[1]);
+            $spanData->name = 'worker-process';
+            $spanData->type = $integration->getJobType($data['commandName']);
+        });
+
+        \DDTrace\trace_method('Bref\\LaravelBridge\\Queue\\LaravelSqsHandler', 'process', function (SpanData $spanData, $args) use ($integration) {
+            $serviceName = $integration->getServiceName();
+            $spanData->service = $serviceName;
+
+            $payload = $args[1]->payload();
+            $data = $payload['data'];
+            $spanData->resource = $integration->getJobName($args[1]);
+            $spanData->name = 'worker-process';
+            $spanData->type = $integration->getJobType($data['commandName']);
+        });
+
+        \DDTrace\trace_method('Illuminate\\Queue\\Worker', 'handleJobException', function (SpanData $spanData, $args) use ($integration) {
+            $payload = $args[1]->payload();
+            $data = $payload['data'];
+            $spanData->name = 'job-handle-exception';
+            $spanData->parent->meta[Tag::JOB_PAYLOAD] = $integration->getJobPayload(unserialize($data['command']));
+        });
+
+        \DDTrace\trace_method('Bref\\LaravelBridge\\Queue\\LaravelSqsHandler', 'raiseExceptionOccurredJobEvent', function (SpanData $spanData, $args) use ($integration) {
+            $payload = $args[1]->payload();
+            $data = $payload['data'];
+            $spanData->name = 'job-handle-exception';
+            $spanData->parent->meta[Tag::JOB_PAYLOAD] = $integration->getJobPayload(unserialize($data['command']));
+        });
+
+        return Integration::LOADED;
+    }
+
+    public function getJobType($commandName)
+    {
+        switch ($commandName) {
+            case 'Illuminate\Broadcasting\BroadcastEvent':
+                return Type::LARAVEL_TYPE_BROADCAST;
+            case 'Illuminate\Notifications\SendQueuedNotifications':
+                return Type::LARAVEL_TYPE_NOTIFICATION;
+            case 'Illuminate\Events\CallQueuedListener':
+                return Type::LARAVEL_TYPE_LISTENER;
+            default:
+                return Type::LARAVEL_TYPE_JOB;
+        }
+    }
+
+    public function getJobName($job)
+    {
+        return $job ? $job->resolveName() : 'unknown_job';
+    }
+
+    public function getJobPayload($command)
+    {
+        return json_encode($this->serializePayload($command), JSON_PRETTY_PRINT);
+    }
+
+    public function serializePayload($command)
+    {
+        $values = [];
+
+        $properties = (new ReflectionClass($command))->getProperties();
+
+        foreach ($properties as $property) {
+            if ($property->isStatic()) {
+                continue;
+            }
+
+            $property->setAccessible(true);
+
+            $name = $property->getName();
+            $value = $property->getValue($command);
+            $values[$name] = $this->serializeValue($value);
+        }
+
+        return $values;
+    }
+
+    public function serializeValue($value)
+    {
+        if ($value instanceof Collection) {
+            return $value->map(function ($item) {
+                return $this->serializeValue($item);
+            })->toArray();
+        } elseif ($value instanceof Model) {
+            return get_class($value) . ": " . $value->getKey();
+        } elseif (is_object($value)) {
+            return $this->serializePayload($value);
+        } else {
+            return $value;
+        }
     }
 
     public function getServiceName()

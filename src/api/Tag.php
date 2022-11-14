@@ -53,4 +53,7 @@ class Tag
 
     // REDIS
     const REDIS_RAW_COMMAND = 'redis.raw_command';
+
+    // Job
+    const JOB_PAYLOAD = 'job.payload';
 }
