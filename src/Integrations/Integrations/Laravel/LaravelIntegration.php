@@ -234,6 +234,17 @@ class LaravelIntegration extends Integration
             $spanData->type = $integration->getJobType($data['commandName']);
         });
 
+        \DDTrace\trace_method('App\\Modules\\Queue\\LaravelSqsHandler', 'process', function (SpanData $spanData, $args) use ($integration) {
+            $serviceName = $integration->getServiceName();
+            $spanData->service = $serviceName;
+
+            $payload = $args[1]->payload();
+            $data = $payload['data'];
+            $spanData->resource = $integration->getJobName($args[1]);
+            $spanData->name = 'worker-process';
+            $spanData->type = $integration->getJobType($data['commandName']);
+        });
+
         \DDTrace\trace_method('Illuminate\\Queue\\Worker', 'handleJobException', function (SpanData $spanData, $args) use ($integration) {
             $payload = $args[1]->payload();
             $data = $payload['data'];
@@ -242,6 +253,13 @@ class LaravelIntegration extends Integration
         });
 
         \DDTrace\trace_method('Bref\\LaravelBridge\\Queue\\LaravelSqsHandler', 'raiseExceptionOccurredJobEvent', function (SpanData $spanData, $args) use ($integration) {
+            $payload = $args[1]->payload();
+            $data = $payload['data'];
+            $spanData->name = 'job-handle-exception';
+            $spanData->parent->meta[Tag::JOB_PAYLOAD] = $integration->getJobPayload(unserialize($data['command']));
+        });
+
+        \DDTrace\trace_method('App\\Modules\\Queue\\LaravelSqsHandler', 'raiseExceptionOccurredJobEvent', function (SpanData $spanData, $args) use ($integration) {
             $payload = $args[1]->payload();
             $data = $payload['data'];
             $spanData->name = 'job-handle-exception';
